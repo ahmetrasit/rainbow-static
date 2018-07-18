@@ -1,0 +1,548 @@
+<html>
+	<head>
+		<script src="d3.min.js"></script>
+		<title>C. elegans Genome Viewer</title>
+		
+	</head>
+	<body style="padding-left:20px">
+	</body>
+	<script>
+		var deg = Math.PI/180
+		var degK = 1
+		var angle = 0
+		var origDegK = 1
+		
+		var lockButtonStatus = true;
+		var lockButtonLabel = 'Zoom'
+		var genomeSize = 15072434
+
+		var height=2000, width=2000, arcHeight=10, space=1, margin = 20;
+		
+		var svg = d3.select("body").append("svg").attr("width", width).attr("height", height).style('background', 'white')	
+		var g = svg.append("g").attr("transform", "translate(" + width/2 + "," + height/2 + ")");	
+		var radialScale = d3.scaleLinear().domain([0, genomeSize]).range([-0.45*Math.PI, 0.5*Math.PI])
+		var reverseRadialScale = d3.scaleLinear().range([0, genomeSize]).domain([-0.45*Math.PI, 0.5*Math.PI])
+		
+		
+		types = ['protein_coding', '22G_exon', '22G_nonExon','piRNA', 'mult_21U_right', 'mult_21U_left', 'pseudogenes', 'transposons', 'ncRNA', 'other'] ; //[miRNA', 'tRNA', 'snRNA', 'lincRNA', 'antisense', 'snoRNA', 'rRNA'] as other
+		var outer = height/2 + 10*space;
+		
+		var color = d3.scaleOrdinal(d3.schemeCategory10);
+		
+		var chr = ['I', 'II', 'III', 'IV', 'V', 'X']
+		svg.selectAll('text.chr').data(chr).enter().append('a')
+				.attr("xlink:href", function(d,i){return "http://ahmetrasit.com/mellolab/cel" + (i+1) + ".html"})
+				.append('text').attr('class', 'chr').attr('text-anchor', 'middle')
+				.attr('x', width/32).attr('y', function(d,i){return 100 + i*70}).html(function(d,i){return d})
+				.style('font-family', 'Times').style('font-size', '4em')
+				.style('opacity', function(d,i){if(d=='I'){return 1}else{return 0.3}})
+				.style('fill', 'lightskyblue').style('stroke', 'steelblue')
+					
+		ci = 0	//color index
+		background = ['white', 'white']
+		var type2data = {}
+		
+		for(i in types){
+			type = types[i]
+			plusFile = type + '_I_1.csv';	//plus strand
+			minusFile = type + '_I_-1.csv';	//minus strand
+			
+			ci++
+			outer = outer - margin
+			mainOuter = outer
+			inner = outer - arcHeight
+			type2data[types[i]+'_1'] = draw(type, './data/' + plusFile, 1, inner, outer, color(ci))
+			
+			outer = inner - space
+			inner = outer - arcHeight	
+			type2data[types[i]+'_-1'] = draw(type, './data/' + minusFile, -1, inner, outer, color(ci))
+		
+			g.append("path").on('mousemove', show)
+				.datum({startAngle:radialScale(0), endAngle: radialScale(genomeSize)})
+				.style("fill", background[ci%2]).style('stroke', color(ci)).style('stroke-width', 2).style('opacity', 1)
+				.attr("d", d3.arc().innerRadius(inner).outerRadius(mainOuter) );
+				
+				
+			g.append("path").attr('id', "track_"+type)
+				.datum({startAngle:-0.495*Math.PI, endAngle: -0.45*Math.PI})
+				.style("fill", "white")
+				.attr("d", d3.arc().innerRadius(inner).outerRadius(mainOuter) );
+				
+			var text = g.append("text").attr('class', 'track_label')
+							.attr('dy', 16)
+							.attr('x', 10)
+							.style('font-family', 'sans-serif')
+							.style('font-size', '1em')
+						.append("textPath").attr('id', 'track_labelPath')
+							.attr('text-anchor', 'start')
+							.attr("fill",color(ci))
+							.attr("xlink:href", "#track_"+type)
+							.html(type);
+						
+		}
+			
+		
+		
+		
+		function draw(type, file, strand, inner, outer, c){
+			d3.csv(file, function(data){
+				type2data[type+'_' + strand] = data
+				amounts = []	
+				for(t in data){
+					amount = parseInt(data[t].amount) / (parseInt(data[t].end) - parseInt(data[t].start))
+					amounts.push(amount)
+				}
+				
+				meanAmount = d3.mean(amounts)
+						
+				for(t in data){
+					s = parseInt(data[t].start)
+					e = parseInt(data[t].end)
+					amount = parseInt(data[t].amount)
+					innerDiff = 0
+					if(amount/(e-s) > meanAmount){
+						innerDiff = 0
+					}
+					amountHeight = outer - innerDiff
+					
+					var arc = d3.arc()
+					
+					if(strand > 0){
+						arc = d3.arc()
+							.innerRadius(inner)
+							.outerRadius(amountHeight);
+					}else{
+						arc = d3.arc()
+							.innerRadius(inner + innerDiff)
+							.outerRadius(outer);
+					}
+					
+										
+					if (s > -1){
+						diff = e-s
+						if(diff < 4000){	//for better visualizing smaller bands
+							add = (4000-diff)/2 
+							s = s - add
+							e = e + add
+						}
+						g.append("path").on('click', displayData)
+							.datum({startAngle:radialScale(s), endAngle:radialScale(e), datum:data[t]})
+							.style("fill", c)
+							.attr("d", arc);
+					}				
+				}
+			});
+		}
+		
+		
+		
+		function displayData(d){
+			//console.log(d)
+		}
+		
+		
+		
+		function zoom(angle){
+			if(angle > (-0.5*Math.PI) & angle < (0.5*Math.PI) ){
+				d3.selectAll('.detailed').remove()
+				
+				start = parseInt(reverseRadialScale(angle-degK*deg)) 
+				end = parseInt(reverseRadialScale(angle+degK*deg))
+				var xScale = d3.scaleLinear().domain([start, end]).range([0, width])
+				
+				found = filterElements(start,end)
+				found_p = found[0]
+				found_m = found[1]
+				
+				
+				ci = 1
+				up = height/2 + margin
+				
+				type = 'protein_coding'
+				transcript_p = getGenes(found_p, type)
+				transcript_m = getGenes(found_m, type)
+				drawInDetail(type+'_geneBox', transcript_p[1], transcript_m[1], up, xScale, 'none', 'black')
+				drawInDetail(type, transcript_p[0], transcript_m[0], up, xScale, color(ci), color(ci))
+				//up = up + 2*arcHeight + margin
+				
+				ci++
+				
+				
+				nonProtein = types.slice(1)
+				for(k in nonProtein){	//22Gs, pseudogenes, transposons, pirnas, etc
+					up = up + arcHeight + margin
+					var type = nonProtein[k]
+					ncrna_p = getNCelements(found_p, type)
+					ncrna_m = getNCelements(found_m, type)
+					drawInDetail(type, ncrna_p, ncrna_m, up, xScale, color(ci), color(ci))
+					
+					ci++
+				}
+				
+				
+				
+				d3.select('text#start').remove()
+				d3.select('text#end').remove()
+			
+				d3.select('svg').append('text').attr('id', 'start').attr('text-anchor', 'start')
+					.attr('x', 0).attr('y', height/2+margin-4).html(start.toLocaleString() + ' bp')
+					.style('font-family', 'Helvetica').style('font-size', '1em')
+
+				d3.select('svg').append('text').attr('id', 'end').attr('text-anchor', 'end')
+					.attr('x', width).attr('y', height/2+margin-4).html(end.toLocaleString() + ' bp')
+					.style('font-family', 'Helvetica').style('font-size', '1em')
+				
+			
+			}
+		}
+		
+		
+		
+		function drawInDetail(type, list_p, list_m, up, scale, fillColor, strokeColor){
+			
+			
+			d3.select('svg').append('rect').attr('class', 'detailed outer')
+					.attr('x', 0)
+					.attr('y', up )
+					.attr('width', width)
+					.attr('height', 2*arcHeight+space)
+					.style('fill', 'none').style('stroke', strokeColor).style('stroke-width', 2).style('opacity', 1)
+							
+					
+			d3.select('svg').selectAll('rect.plus_' + type).data(list_p).enter()
+				.append('rect').attr('class', 'detailed plus_' + type).on('mousemove', showData)
+					.attr('x', function(d,i){return scale(d.start)})
+					.attr('y', up)
+					.attr('width', function(d,i){return ( scale(d.end) - scale(d.start) )})
+					.attr('height', arcHeight)
+					.style('fill', fillColor).style('stroke', strokeColor).style('stroke-width', 0.5)
+			
+			d3.select('svg').selectAll('rect.minus_' + type).data(list_m).enter()
+				.append('rect').attr('class', 'detailed minus_' + type).on('mousemove', showData)
+					.attr('x', function(d,i){return scale(d.start)})
+					.attr('y', up + arcHeight+space)
+					.attr('width', function(d,i){return ( scale(d.end) - scale(d.start) )})
+					.attr('height', arcHeight)
+					.style('fill', fillColor).style('stroke', strokeColor).style('stroke-width', 0.5)
+		
+		}
+		
+		
+		
+		function getNCelements(list, type){
+			var elements = []
+			var curr = list[type]
+			for(i in curr){
+				element = getNCelement(curr[i].elements)
+				elements = elements.concat(element)
+			}
+			return elements
+		}
+		
+		
+		
+		function getNCelement(elementString){
+			var elements = []
+			var list = elementString.split(';')
+			for(i in list){
+				var curr = list[i].split(':')
+				elements.push({'start':curr[3], 'end':curr[4], 'gene':curr[0], 'symbol':curr[7], 'sequence':curr[6]})
+			}
+			return elements
+		}
+		
+		
+		
+		function getGenes(list, type){
+			var elements = []
+			var geneBoxes = []
+			var curr = list[type]
+			for(i in curr){
+				element = getGene(curr[i].elements)
+				elements = elements.concat(element[0])
+				geneBoxes = geneBoxes.concat(element[1])
+			}
+			return [elements, geneBoxes]
+		}
+		
+		
+		
+		function getGene(geneString){
+			var elements = []
+			var geneBox = []
+			var list = geneString.split(';')
+			for(i in list){	//first two are start and end of whole gene
+				var exons = list[i].split('|')
+				if(parseInt(exons[1]) < parseInt(exons[0])){
+					geneBox.push({ 'start':exons[1], 'end':exons[0] })
+				}
+				geneBox.push({ 'start':exons[0], 'end':exons[1] })
+				exons = exons.slice(2)
+				for(e in exons){
+					var exon = exons[e]
+					var curr = exon.split(':')
+					elements.push({'start':curr[5], 'end':curr[6], 'gene':curr[7], 'symbol':curr[7], 'sequence':curr[8]})
+				}
+				
+				
+			}
+			return [elements, geneBox]
+		}
+		
+		
+		
+		function filterElements(start,end){
+			var found_p = {}
+			var found_m = {}
+			
+			for(i in types){
+				curr = type2data[types[i]+'_1']
+				found_p[types[i]] = []
+				found_m[types[i]] = []
+				for(c in curr){
+					cStart = parseInt(curr[c].start)
+					cEnd = parseInt(curr[c].end)
+					
+					if( (cStart >= start & cStart <= end) | (cEnd >= start & cEnd <= end) | (start >= cStart & end <= cEnd)  ){
+						found_p[types[i]].push(curr[c])
+					}
+				}
+				
+				curr = type2data[types[i]+'_-1']
+				for(c in curr){
+					cStart = parseInt(curr[c].start)
+					cEnd = parseInt(curr[c].end)
+					
+					if( (cStart >= start & cStart <= end) | (cEnd >= start & cEnd <= end) | (start >= cStart & end <= cEnd) ){
+						found_m[types[i]].push(curr[c])
+					}
+				}
+			}
+			return [found_p, found_m]
+		}
+		
+		
+		
+		
+		function lockButton(){
+			console.log('hey')
+			if(lockButtonStatus){
+			
+			
+				lockButtonLabel = 'Release'
+				lockButtonStatus = false;
+				d3.selectAll('#lockButton').style('fill', 'red')
+				d3.selectAll('.zoom').style('display', 'block')
+				
+				
+				
+				
+				
+			}else{
+				lockButtonLabel = 'Zoom'
+				lockButtonStatus = true;
+				d3.selectAll('#lockButton').style('fill', 'steelblue')
+				d3.selectAll('.zoom').style('display', 'none')
+			}
+			d3.selectAll('#lockButtonPath').html(lockButtonLabel)
+		}
+		
+		
+				
+		function show(){
+			console.log(d3.mouse(this)[0])
+			
+			if(lockButtonStatus){
+				
+				var arc = d3.arc()
+					.innerRadius(height/2 - 325)
+					.outerRadius(height/2);
+					
+				var arcButton = d3.arc()
+					.innerRadius(height/2 - 370)
+					.outerRadius(height/2 - 330);
+				
+				var arcZoom = d3.arc()
+					.innerRadius(height/2 - 405)
+					.outerRadius(height/2 - 380);
+					
+				var coords = d3.mouse(this);    
+				var adjusted_x = coords[0]
+				var adjusted_y = coords[1]
+				
+				var d = Math.sqrt( ( adjusted_x * adjusted_x ) + ( adjusted_y * adjusted_y ) );
+				angle = Math.atan2( adjusted_y, adjusted_x ) + Math.PI/2
+				
+				
+				if(angle > (-0.455*Math.PI + degK*deg) & angle < (0.5*Math.PI - degK*deg) ){
+					
+					d3.selectAll('.marker').remove()
+				
+					g.append("path").attr('id', 'leftGray').attr('class', 'marker').on('mousemove', show)
+						.datum({startAngle:angle-3*deg, endAngle: angle-deg*degK})
+						.style("fill", "#bdbdbd").style('stroke', 'none').style('opacity', 0.3)
+						.attr("d", arc);
+					
+					g.append("path").attr('id', 'rigthGray').attr('class', 'marker').on('mousemove', show)
+						.datum({startAngle:angle+deg*degK, endAngle: angle+3*deg})
+						.style("fill", "#bdbdbd").style('stroke', 'none').style('opacity', 0.3)
+						.attr("d", arc);
+					
+					g.append("path").attr('class', 'marker clicked').on('mousedown', lockButton).on('mousemove', show)
+						.datum({startAngle:angle-3*deg, endAngle: angle+3*deg})
+						.style("fill", "white").style('stroke', 'gray').style('opacity', 0.01)
+						.attr("d", arc);
+						
+					g.append("path").attr('class', 'marker').on('mousemove', show)
+						.datum({startAngle:angle-3*deg, endAngle: angle+3*deg})
+						.style("fill", "none").style('stroke', 'gray').style('opacity', 1)
+						.attr("d", arc);
+						
+					g.append("path").attr('id', 'lockButton').attr('class', 'marker lockButton').on('mousemove', show)
+						.datum({startAngle:angle-3*deg, endAngle: angle+3*deg})
+						.style("fill", "steelblue").style('stroke', 'gray').style('opacity', 1)
+						.attr("d", arcButton);
+					
+					
+					var text = g.append("text").on('mousemove', show).attr('class', 'marker lockButton')
+							.attr('dy', 25)
+							.attr('x', 39 )
+							.style('font-family', 'sans-serif')
+							.style('font-size', '1.2em')
+						.append("textPath").attr('id', 'lockButtonPath')
+							.attr('text-anchor', 'middle')
+							.attr("fill","white")
+							.attr("xlink:href","#lockButton")
+							.html(lockButtonLabel);
+		
+		
+					//zoom in button	
+					g.append("path").attr('id', 'zoomOut').attr('class', 'marker zoom').on('click', zoomOut)
+						.datum({startAngle:angle-3*deg, endAngle: angle - 1*deg})
+						.style("fill", "green").style('stroke', 'gray').style('opacity', 1)
+						.attr("d", arcZoom).style('display', 'none');
+						
+					//zoom out
+					g.append("path").attr('id', 'zoomIn').attr('class', 'marker zoom').on('click', zoomIn)
+						.datum({startAngle:angle + 1*deg, endAngle: angle + 3*deg})
+						.style("fill", "green").style('stroke', 'gray').style('opacity', 1)
+						.attr("d", arcZoom).style('display', 'none');
+						
+						
+					var text2 = g.append("text").on('click', zoomIn).attr('class', 'marker zoom')
+							.attr('dy', 21)
+							.attr('x', 39 )
+							.style('font-family', 'sans-serif')
+							.style('font-size', '2em')
+						.append("textPath").attr('id', 'zoomInPath')
+							.attr('text-anchor', 'middle')
+							.attr("fill","white")
+							.attr("xlink:href","#zoomIn")
+							.html('+');	
+					
+					var text3 = g.append("text").on('click', zoomOut).attr('class', 'marker zoom')
+							.attr('dy', 21)
+							.attr('x', 39 )
+							.style('font-family', 'sans-serif')
+							.style('font-size', '2em')
+						.append("textPath").attr('id', 'zoomOutPath')
+							.attr('text-anchor', 'middle')
+							.attr("fill","white")
+							.attr("xlink:href","#zoomOut")
+							.text('-');	
+		
+		
+					//.attr("startOffset","50%")
+					//.style("text-anchor","middle")
+					g.selectAll('.lockButton').on('mousedown', lockButton)
+				
+					zoom(angle)	
+				}	
+			}
+		}
+		
+		
+		
+		function zoomIn(){
+			if(origDegK/degK < 10){
+				degK = degK * .5
+				d3.selectAll('#zoomOut').style('opacity', 1)
+			}else{
+				d3.selectAll('#zoomIn').style('opacity', 0.1)
+			}
+			zoom(angle)
+			
+			
+			var arc = d3.arc()
+					.innerRadius(height/2 - 255)
+					.outerRadius(height/2);
+			
+			d3.selectAll('#leftGray').remove()
+			d3.selectAll('#rigthGray').remove()
+				
+			g.append("path").attr('id', 'leftGray').attr('class', 'marker').on('mousemove', show)
+				.datum({startAngle:angle-3*deg, endAngle: angle-deg*degK})
+				.style("fill", "#bdbdbd").style('stroke', 'none').style('opacity', 0.3)
+				.attr("d", arc);
+			
+			g.append("path").attr('id', 'rigthGray').attr('class', 'marker').on('mousemove', show)
+				.datum({startAngle:angle+deg*degK, endAngle: angle+3*deg})
+				.style("fill", "#bdbdbd").style('stroke', 'none').style('opacity', 0.3)
+				.attr("d", arc);
+	
+		}
+		
+		
+		
+		function zoomOut(){
+			if(origDegK/degK >= 0.8){
+				degK = degK * 2
+				d3.selectAll('#zoomIn').style('opacity', 1)
+			}else{
+				d3.selectAll('#zoomOut').style('opacity', 0.1)
+			}
+			zoom(angle)
+			
+			
+			var arc = d3.arc()
+					.innerRadius(height/2 - 255)
+					.outerRadius(height/2);
+			
+			d3.selectAll('#leftGray').remove()
+			d3.selectAll('#rigthGray').remove()
+				
+			g.append("path").attr('id', 'leftGray').attr('class', 'marker').on('mousemove', show)
+				.datum({startAngle:angle-3*deg, endAngle: angle-deg*degK})
+				.style("fill", "#bdbdbd").style('stroke', 'none').style('opacity', 0.3)
+				.attr("d", arc);
+			
+			g.append("path").attr('id', 'rigthGray').attr('class', 'marker').on('mousemove', show)
+				.datum({startAngle:angle+deg*degK, endAngle: angle+3*deg})
+				.style("fill", "#bdbdbd").style('stroke', 'none').style('opacity', 0.3)
+				.attr("d", arc);
+		}
+		
+		
+		
+		function hide(){
+			d3.selectAll('.marker').remove()
+		}
+		
+		
+		function showData(d){
+			d3.select('text#displayGene').remove()
+			//d3.select('text#displaySequence').remove()
+			
+			d3.select('svg').append('text').attr('id', 'displayGene').attr('text-anchor', 'middle')
+				.attr('x', width/2).attr('y', height/2).html(function(){if(d.gene == d.symbol){return d.gene}else{ return d.gene + ' (' + d.symbol + ')'}})
+				.style('font-family', 'Helvetica').style('font-size', '1.5em')
+			
+			//d3.select('svg').append('text').attr('id', 'displaySequence').attr('text-anchor', 'middle')
+			//	.attr('x', width/2).attr('y', height/2+margin).html(d.sequence)
+			
+		}
+		
+		
+
+	</script>
+</html>
